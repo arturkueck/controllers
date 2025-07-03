@@ -15,10 +15,43 @@ theta0 = np.pi / 4
 omega0 = 0.0
 dt = 0.05
 
+is_paused = False
+debug_shown = False
+theta_history = []
+
+def show_pid_debug(theta, omega, dt, controller, torque):
+    fig, ax = plt.subplots(figsize=(7, 6))
+    fig.canvas.manager.set_window_title("PID Equation Breakdown")
+    ax.axis("off")
+
+    error = controller.setpoint - theta
+    derivative = controller.last_derivative
+    integral = controller.integral
+
+    latex = (
+        r"$\tau = K_p \cdot e(t) + K_i \cdot \int e(t)\,dt + K_d \cdot \frac{de(t)}{dt}$"
+    )
+
+    values = (
+        f"e(t) = setpoint - θ = {np.degrees(controller.setpoint):.1f}° - {np.degrees(theta):.1f}° = {np.degrees(error):.1f}°"
+        f"∫e(t)dt = {integral:.4f}\n"
+        f"de(t)/dt = {derivative:.7f}\n\n"
+        f"Kp = {controller.Kp:.2f}, Ki = {controller.Ki:.2f}, Kd = {controller.Kd:.2f}\n\n"
+        f"τ = {torque:.4f} Nm"
+    )
+
+    ax.text(0.5, 0.9, latex, ha="center", va="top", fontsize=16)
+    ax.text(0.05, 0.75, values, ha="left", va="top", fontsize=12, family="monospace")
+
+    plt.tight_layout()
+    plt.show()
+
+
 # === PID Controller ===
 class PIDController:
     def __init__(self, setpoint=0.0):
         self.setpoint = setpoint
+        self.last_derivative = 0.0
         self.integral = 0.0
         self.prev_error = 0.0
         self.Kp = 10.0
@@ -31,11 +64,13 @@ class PIDController:
 
     def get_torque(self, theta, omega, dt):
         error = self.setpoint - theta
-        self.integral += error * dt
         derivative = (error - self.prev_error) / dt if dt > 0 else 0.0
-        self.prev_error = error
+        self.last_derivative = derivative  # 🆕 Save it here
+        self.integral += error * dt
         torque = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+        self.prev_error = error
         return torque
+
 
 controller = PIDController()
 
@@ -48,7 +83,7 @@ torque_history = []
 
 # === Plot setup ===
 fig, (ax_pendulum, ax_force) = plt.subplots(2, 1, figsize=(6, 7), gridspec_kw={'height_ratios': [2, 1], 'hspace': 0.4})
-plt.subplots_adjust(left=0.15, bottom=0.4)
+plt.subplots_adjust(left=0.15, bottom=0.5)
 
 # -- Pendulum subplot
 ax_pendulum.set_xlim(-L - 0.2, L + 0.2)
@@ -63,7 +98,7 @@ ax_force.set_ylim(-50, 50)
 ax_force.set_title("Torque over Time")
 ax_force.set_xlabel("Time [s]")
 ax_force.set_ylabel("Torque [Nm]")
-torque_line, = ax_force.plot([], [], lw=2, color='tab:red')
+torque_line, = ax_force.plot([], [], lw=2, color='tab:red', label="Torque")
 
 # === Sliders ===
 slider_ax_kp = plt.axes([0.25, 0.30, 0.6, 0.025])
@@ -72,22 +107,35 @@ slider_ax_kd = plt.axes([0.25, 0.20, 0.6, 0.025])
 
 slider_kp = Slider(slider_ax_kp, 'Kp', 0.0, 100.0, valinit=controller.Kp)
 slider_ki = Slider(slider_ax_ki, 'Ki', 0.0, 1.0, valinit=controller.Ki)
-slider_kd = Slider(slider_ax_kd, 'Kd', 0.0, 100.0, valinit=controller.Kd)
+slider_kd = Slider(slider_ax_kd, 'Kd', 0.0, 500.0, valinit=controller.Kd)
 
 def update_gains(val=None):
     controller.Kp = slider_kp.val
     controller.Ki = slider_ki.val
     controller.Kd = slider_kd.val
+    controller.setpoint = np.radians(setpoint_slider.val)  # convert degrees → radians
+
 
 slider_kp.on_changed(update_gains)
 slider_ki.on_changed(update_gains)
 slider_kd.on_changed(update_gains)
 
 # === Push Buttons ===
-push_left_ax = plt.axes([0.3, 0.1, 0.15, 0.05])
-push_right_ax = plt.axes([0.55, 0.1, 0.15, 0.05])
+push_left_ax = plt.axes([0.1, 0.02, 0.15, 0.05])
+push_right_ax = plt.axes([0.75, 0.02, 0.15, 0.05])
 button_left = Button(push_left_ax, 'Push Left', color='lightgray', hovercolor='gray')
 button_right = Button(push_right_ax, 'Push Right', color='lightgray', hovercolor='gray')
+
+pause_ax      = plt.axes([0.42, 0.02, 0.15, 0.05])
+pause_button = Button(pause_ax, 'Pause', color='lightgray', hovercolor='gray')
+
+def toggle_pause(event):
+    global is_paused, debug_shown
+    is_paused = not is_paused
+    debug_shown = False
+    pause_button.label.set_text('Resume' if is_paused else 'Pause')
+
+pause_button.on_clicked(toggle_pause)
 
 
 def push_left(event):
@@ -101,13 +149,19 @@ def push_right(event):
 button_left.on_clicked(push_left)
 button_right.on_clicked(push_right)
 
-angle_slider_ax = plt.axes([0.25, 0.04, 0.5, 0.025])
+angle_slider_ax = plt.axes([0.25, 0.10, 0.5, 0.025])
 angle_slider = Slider(angle_slider_ax, 'Push Angle (°)', 0.0, 90.0, valinit=15.0)
+
+setpoint_slider_ax = plt.axes([0.25, 0.15, 0.5, 0.025])
+setpoint_slider = Slider(setpoint_slider_ax, 'Setpoint (°)', -180.0, 180.0, valinit=0.0)
+
+
 
 # === ODE system ===
 def pendulum_ode(t, y):
     theta, omega = y
     torque = controller.get_torque(theta, omega, dt) + disturbance_torque[0]
+    controller.last_torque = torque  # already exists ✅
     disturbance_torque[0] *= 0.9
     dtheta_dt = omega
     domega_dt = - (g / L) * np.sin(theta) + torque / I
@@ -115,7 +169,16 @@ def pendulum_ode(t, y):
 
 # === Animation function ===
 def animate(frame):
-    global state, time
+    global state, time, debug_shown
+
+    if is_paused:
+        if not debug_shown:
+            theta, omega = state
+            torque = controller.last_torque
+            show_pid_debug(theta, omega, dt, controller, torque)
+            debug_shown = True
+        return pendulum_line, torque_line
+
 
     update_gains()
     sol = solve_ivp(pendulum_ode, [0, dt], state, t_eval=[dt])
@@ -123,9 +186,10 @@ def animate(frame):
     state[:] = [theta, omega]
     time[0] += dt
 
-    torque = controller.get_torque(theta, omega, dt)
+    torque = controller.last_torque  # ✅ Reuse the computed value
     time_history.append(time[0])
     torque_history.append(torque)
+    theta_history.append(theta)
 
     # Draw pendulum
     x = L * np.sin(theta)

@@ -27,9 +27,11 @@ disturbance_torque = [0.0]
 torque_history = []
 time_history = []
 
+is_paused = False
+
 # === Plot setup ===
 fig, (ax_pendulum, ax_torque) = plt.subplots(2, 1, figsize=(6, 7), gridspec_kw={'height_ratios': [2, 1]})
-plt.subplots_adjust(bottom=0.35, hspace=0.4)
+plt.subplots_adjust(bottom=0.45, hspace=0.4)
 
 # -- Pendulum
 ax_pendulum.set_xlim(-L - 0.2, L + 0.2)
@@ -46,17 +48,23 @@ ax_torque.set_ylabel("Torque [Nm]")
 torque_line, = ax_torque.plot([], [], lw=2, color='tab:red')
 
 # === Sliders ===
-ax_lambda = plt.axes([0.25, 0.25, 0.6, 0.03])
-ax_eta = plt.axes([0.25, 0.20, 0.6, 0.03])
-ax_eps = plt.axes([0.25, 0.15, 0.6, 0.03])
+ax_lambda = plt.axes([0.25, 0.35, 0.6, 0.03])
+ax_eta = plt.axes([0.25, 0.30, 0.6, 0.03])
+ax_eps = plt.axes([0.25, 0.25, 0.6, 0.03])
 
-slider_lambda = Slider(ax_lambda, 'λ (lambda)', 0.1, 20.0, valinit=lambda_init)
-slider_eta = Slider(ax_eta, 'η (eta)', 0.1, 2.0, valinit=eta_init)
-slider_eps = Slider(ax_eps, 'ε (epsilon)', 0.001, 0.1, valinit=epsilon_init)
+slider_lambda = Slider(ax_lambda, 'λ (lambda)', 0, 20.0, valinit=lambda_init)
+slider_eta = Slider(ax_eta, 'η (eta)', 0, 2.0, valinit=eta_init)
+slider_eps = Slider(ax_eps, 'ε (epsilon)', 0.001, 1, valinit=epsilon_init)
+
+ax_lmodel = plt.axes([0.25, 0.20, 0.6, 0.03])
+ax_gmodel = plt.axes([0.25, 0.15, 0.6, 0.03])
+
+slider_lmodel = Slider(ax_lmodel, 'L_model', 0.5, 2.0, valinit=L)
+slider_gmodel = Slider(ax_gmodel, 'g_model', 0.0, 50.0, valinit=g)
 
 # === Push Buttons ===
-push_left_ax = plt.axes([0.3, 0.05, 0.15, 0.05])
-push_right_ax = plt.axes([0.55, 0.05, 0.15, 0.05])
+push_left_ax = plt.axes([0.1, 0.05, 0.15, 0.05])
+push_right_ax = plt.axes([0.75, 0.05, 0.15, 0.05])
 
 button_left = Button(push_left_ax, 'Push Left', color='lightgray', hovercolor='gray')
 button_right = Button(push_right_ax, 'Push Right', color='lightgray', hovercolor='gray')
@@ -70,22 +78,81 @@ def push_right(event):
 button_left.on_clicked(push_left)
 button_right.on_clicked(push_right)
 
+pause_ax = plt.axes([0.42, 0.05, 0.15, 0.05])  # center bottom
+pause_button = Button(pause_ax, 'Pause', color='lightgray', hovercolor='gray')
+
+def toggle_pause(event):
+    global is_paused, debug_shown
+    is_paused = not is_paused
+    debug_shown = False  # reset when toggled
+    pause_button.label.set_text('Resume' if is_paused else 'Pause')
+
+
+pause_button.on_clicked(toggle_pause)
+
+
 # === SMC control law ===
 def smc_control(theta, omega):
     lam = slider_lambda.val
     eta = slider_eta.val
     eps = slider_eps.val
 
-    s = omega + lam * theta
-    sat = np.tanh(s / eps)  # smoothed sign function
+    L_model = slider_lmodel.val
+    g_model = slider_gmodel.val
 
-    # SMC torque
-    u = -I * (g / L * np.sin(theta) + lam * omega) - eta * sat
+    s = omega + lam * theta
+    sat = np.tanh(s / eps)
+
+    # Use incorrect model values (L_model, g_model)
+    u = -I * (g_model / L_model * np.sin(theta) + lam * omega) - eta * sat
     return u
+
+def update_debug_window(theta, omega, lam, eta, eps, u, s, sat):
+    fig_debug, ax_debug = plt.subplots(figsize=(7, 6))
+    fig_debug.canvas.manager.set_window_title("SMC Equation Breakdown")
+
+    ax_debug.axis("off")
+
+    # --- LaTeX control formula ---
+    latex_formula = (
+        r"$u = -I \left( \frac{g_\mathrm{model}}{L_\mathrm{model}} \sin(\theta) + "
+        r"\lambda \cdot \omega \right) - \eta \cdot \tanh\left( \frac{s}{\varepsilon} \right)$"
+    )
+
+    text_info = (
+        "SMC Control Law:\n"
+        "u = -I * (g_model/L_model * sin(θ) + λ * ω) - η * sat(s/ε)\n"
+        "where s = ω + λ * θ\n\n"
+        f"θ = {np.degrees(theta):.2f}° ({theta:.4f} rad)\n"
+        f"ω = {omega:.4f} rad/s\n"
+        f"λ = {lam:.2f}, η = {eta:.2f}, ε = {eps:.3f}\n\n"
+        f"s = ω + λθ = {s:.4f}\n"
+        f"sat(s/ε) = {sat:.4f}\n\n"
+        f"u = {u:.4f} Nm"
+    )
+
+    ax_debug.text(0.05, 0.9, latex_formula, ha='left', va='top', fontsize=16)
+    ax_debug.text(0.05, 0.75, text_info, ha='left', va='top', fontsize=11, family='monospace')
+
+    plt.tight_layout()
+    plt.show()
 
 # === Animation ===
 def animate(frame):
-    global state, time
+    global state, time, debug_shown
+
+    if is_paused:
+        if not debug_shown:
+            lam = slider_lambda.val
+            eta = slider_eta.val
+            eps = slider_eps.val
+            theta, omega = state
+            s = omega + lam * theta
+            sat_val = np.tanh(s / eps)
+            u = -I * (slider_gmodel.val / slider_lmodel.val * np.sin(theta) + lam * omega) - eta * sat_val
+            update_debug_window(theta, omega, lam, eta, eps, u, s, sat_val)
+            debug_shown = True
+        return line, torque_line
 
     theta, omega = state
     u = smc_control(theta, omega) + disturbance_torque[0]
@@ -96,7 +163,7 @@ def animate(frame):
     time_history.append(time[0])
 
     # Trim plot history
-    while time_history and time[0] - time_history[0] > 10:
+    while time_history and time[0] - time_history[0] > 4:
         time_history.pop(0)
         torque_history.pop(0)
 
@@ -118,7 +185,7 @@ def animate(frame):
     title.set_text(f"t={time[0]:.1f}s | θ={np.degrees(theta):+.1f}° | τ={u:.2f}")
 
     # Torque plot
-    ax_torque.set_xlim(max(0, time[0] - 10), time[0])
+    ax_torque.set_xlim(max(0, time[0] - 4), time[0])
     torque_line.set_data(time_history, torque_history)
     ax_torque.relim()
     ax_torque.autoscale_view(scalex=False, scaley=True)
