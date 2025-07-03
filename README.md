@@ -1,10 +1,10 @@
 # controllers
-Simple simulations of controllers for my seminar.\n
-Basic Controllers:\n
-PID\n
-LGR\n
+Simple simulations of controllers for my seminar.\
+Basic Controllers:\
+PID\
+LQR
 
-Advanced Controllers:\n
-Feedback Linearisation (FL)\n
-Sliding mode control (smc)\n
-Adaptive Control (AC) based on the system’s tracking error and a Lyapunov function\n
+Advanced Controllers:\
+Feedback Linearisation (FL)\
+Sliding mode control (smc)
+Adaptive Control (AC) based on the system’s tracking error and a Lyapunov function
