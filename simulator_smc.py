@@ -15,8 +15,8 @@ dt = 0.05
 
 # === Initial SMC Parameters ===
 lambda_init = 5.0
-eta_init = 0.5
-epsilon_init = 0.05
+eta_init = 30
+epsilon_init = 0.75
 
 # === State and disturbance ===
 theta0 = 0.2  # pendulum pointing down
@@ -53,7 +53,7 @@ ax_eta = plt.axes([0.25, 0.30, 0.6, 0.03])
 ax_eps = plt.axes([0.25, 0.25, 0.6, 0.03])
 
 slider_lambda = Slider(ax_lambda, 'λ (lambda)', 0, 20.0, valinit=lambda_init)
-slider_eta = Slider(ax_eta, 'η (eta)', 0, 2.0, valinit=eta_init)
+slider_eta = Slider(ax_eta, 'η (eta)', 0, 100.0, valinit=eta_init)
 slider_eps = Slider(ax_eps, 'ε (epsilon)', 0.001, 1, valinit=epsilon_init)
 
 ax_lmodel = plt.axes([0.25, 0.20, 0.6, 0.03])
@@ -61,6 +61,13 @@ ax_gmodel = plt.axes([0.25, 0.15, 0.6, 0.03])
 
 slider_lmodel = Slider(ax_lmodel, 'L_model', 0.5, 2.0, valinit=L)
 slider_gmodel = Slider(ax_gmodel, 'g_model', 0.0, 50.0, valinit=g)
+
+ax_theta_d = plt.axes([0.25, 0.10, 0.6, 0.03])
+slider_theta_d = Slider(ax_theta_d, 'setpoint (°)', -180, 180, valinit=0.0)
+
+# Inside smc_control():
+theta_d = np.radians(slider_theta_d.val)
+
 
 # === Push Buttons ===
 push_left_ax = plt.axes([0.1, 0.05, 0.15, 0.05])
@@ -99,63 +106,69 @@ def smc_control(theta, omega):
 
     L_model = slider_lmodel.val
     g_model = slider_gmodel.val
+    theta_d = wrap_angle(np.radians(slider_theta_d.val))
 
-    s = omega + lam * theta
+    s = omega + lam * (theta - theta_d)
     sat = np.tanh(s / eps)
 
-    # Use incorrect model values (L_model, g_model)
     u = -I * (g_model / L_model * np.sin(theta) + lam * omega) - eta * sat
-    return u
+    return u, s, sat, theta_d
 
-def update_debug_window(theta, omega, lam, eta, eps, u, s, sat):
+
+def update_debug_window(theta, omega, theta_d, lam, eta, eps, u, s, sat):
     fig_debug, ax_debug = plt.subplots(figsize=(7, 6))
     fig_debug.canvas.manager.set_window_title("SMC Equation Breakdown")
 
     ax_debug.axis("off")
 
-    # --- LaTeX control formula ---
     latex_formula = (
         r"$u = -I \left( \frac{g_\mathrm{model}}{L_\mathrm{model}} \sin(\theta) + "
         r"\lambda \cdot \omega \right) - \eta \cdot \tanh\left( \frac{s}{\varepsilon} \right)$"
+        "\n\n"
+        r"$s = \omega + \lambda(\theta - \theta_d)$"
     )
 
     text_info = (
-        "SMC Control Law:\n"
-        "u = -I * (g_model/L_model * sin(θ) + λ * ω) - η * sat(s/ε)\n"
-        "where s = ω + λ * θ\n\n"
         f"θ = {np.degrees(theta):.2f}° ({theta:.4f} rad)\n"
+        f"setpoint = {np.degrees(theta_d):.2f}° ({theta_d:.4f} rad)\n"
         f"ω = {omega:.4f} rad/s\n"
         f"λ = {lam:.2f}, η = {eta:.2f}, ε = {eps:.3f}\n\n"
-        f"s = ω + λθ = {s:.4f}\n"
+        f"s = {s:.4f}\n"
         f"sat(s/ε) = {sat:.4f}\n\n"
         f"u = {u:.4f} Nm"
     )
 
-    ax_debug.text(0.05, 0.9, latex_formula, ha='left', va='top', fontsize=16)
-    ax_debug.text(0.05, 0.75, text_info, ha='left', va='top', fontsize=11, family='monospace')
-
+    ax_debug.text(0.05, 0.85, latex_formula, ha='left', va='top', fontsize=14)
+    ax_debug.text(0.05, 0.6, text_info, ha='left', va='top', fontsize=11, family='monospace')
     plt.tight_layout()
     plt.show()
+
 
 # === Animation ===
 def animate(frame):
     global state, time, debug_shown
-
+    
     if is_paused:
         if not debug_shown:
             lam = slider_lambda.val
             eta = slider_eta.val
             eps = slider_eps.val
+            theta_d = wrap_angle(np.radians(slider_theta_d.val))  # Add this line
             theta, omega = state
-            s = omega + lam * theta
+            s = omega + lam * (theta - theta_d)
             sat_val = np.tanh(s / eps)
             u = -I * (slider_gmodel.val / slider_lmodel.val * np.sin(theta) + lam * omega) - eta * sat_val
-            update_debug_window(theta, omega, lam, eta, eps, u, s, sat_val)
+            update_debug_window(theta, omega, theta_d, lam, eta, eps, u, s, sat_val)
             debug_shown = True
         return line, torque_line
 
     theta, omega = state
-    u = smc_control(theta, omega) + disturbance_torque[0]
+    u, s, sat_val, theta_d = smc_control(theta, omega)
+    u += disturbance_torque[0]
+    
+    MAX_TORQUE = 50.0
+    u = np.clip(u, -MAX_TORQUE, MAX_TORQUE)
+    
     disturbance_torque[0] *= 0.9
 
     # Save for torque plot
@@ -191,6 +204,10 @@ def animate(frame):
     ax_torque.autoscale_view(scalex=False, scaley=True)
 
     return line, torque_line
+
+def wrap_angle(angle):
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
 
 ani = FuncAnimation(fig, animate, interval=50)
 plt.show()
